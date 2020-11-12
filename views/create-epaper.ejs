@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+    <%- include('partials/head') %>
+</head>
+
+<body>
+    <div class="container-fluid">
+        <%- include('partials/header') %>
+        <div class="row no-gutters">
+            <div class="col-auto">
+                <%- include('partials/menu') %>
+            </div>
+            <div class="col">
+                <div class="row no-gutters">
+                    <div class="col-8">
+                        <section class="main-body">
+                        <h2>View E-Papers</h2>
+                        <table class="table">
+                            <thead>
+                                <tr>
+                                    <th>E-Paper Date</th>
+                                    <th>E-Paper</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <% epaper.forEach(function(item) { %>
+                                <tr>
+                                    <td><%= item.EpaperDate %></td>
+                                    <td><%= item.epFile %></td>
+                                </tr>
+                                <% }) %>
+                            </tbody>
+                        </table>
+                        </section>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="row no-gutters">
+            <div class="col-12">
+                <%- include('partials/footer') %>
+            </div>
+        </div>
+    </div>
+    <script src="https://code.jquery.com/jquery-3.5.1.slim.min.js"
+        integrity="sha384-DfXdz2htPH0lsSSs5nCTpuj/zy4C+OGpamoFVy38MVBnE+IbbVYUew+OrCXaRkfj"
+        crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@4.5.3/dist/js/bootstrap.bundle.min.js"
+        integrity="sha384-ho+j7jyWK8fNQe+A12Hb8AhRq26LrZ/JpcUGGOn+Y7RsweNrtN/tE3MoK7ZeZDyx"
+        crossorigin="anonymous"></script>
+</body>
+
+</html>
