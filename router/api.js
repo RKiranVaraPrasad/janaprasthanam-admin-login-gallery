@@ -5,7 +5,8 @@ var express     = require('express'),
     bcrypt = require('bcryptjs'),
     { body, validationResult } = require('express-validator'),
     router = express.Router(),
-    connection = require('../database');
+    connection = require('../database'),
+    dbConnection = require('../loginDB');
 
 // uploads
 var storage = multer.diskStorage({
@@ -16,6 +17,12 @@ var storage = multer.diskStorage({
 })
 var storagePdf = multer.diskStorage({
     destination: './public/pdf',
+    filename: function(req, file, cb) {
+        cb(null, file.fieldname + '-' + Date.now() + path.extname(file.originalname));
+    }
+})
+var storageGallery = multer.diskStorage({
+    destination: './public/gallery',
     filename: function(req, file, cb) {
         cb(null, file.fieldname + '-' + Date.now() + path.extname(file.originalname));
     }
@@ -42,6 +49,17 @@ var pdf = multer({
     }
   }
 });
+var galleryFolder = multer({
+    storage: storageGallery,
+    fileFilter: (req, file, cb) => {
+    if (file.mimetype == "image/png" || file.mimetype == "image/jpg" || file.mimetype == "image/jpeg") {
+      cb(null, true);
+    } else {
+      cb(null, false);
+      return cb(new Error('Only .png, .jpg and .jpeg format allowed!'));
+    }
+  }
+});
 
 router.use(cookieSession({
     name: 'session',
@@ -64,17 +82,22 @@ var ifLoggedin = (req,res,next) => {
 
 // login
 router.get('/', ifNotLoggedin, (req,res,next) => {
-    connection.execute("SELECT name FROM users WHERE id=?",[req.session.userID])
-    .then(([rows]) => {
-        res.render('post',{
-            name:rows[0].name
-        });
-    });
-    
+    var sql = "SELECT name FROM users WHERE id=?"
+    connection.query('SELECT * FROM category', (err, result) => {
+        if (!err)
+            res.render('post', {category: result});
+        else
+            console.log(err)
+    })
+})
+router.get('/logout',(req,res)=>{
+    //session destroy
+    req.session = null;
+    res.redirect('/admin');
 });
 router.post('/', ifLoggedin, [
     body('user_email').custom((value) => {
-        return connection.execute('SELECT email FROM users WHERE email=?', [value])
+        return dbConnection.execute('SELECT `email` FROM `users` WHERE `email`=?', [value])
         .then(([rows]) => {
             if(rows.length == 1){
                 return true;
@@ -86,43 +109,89 @@ router.post('/', ifLoggedin, [
     }),
     body('user_pass','Password is empty!').trim().not().isEmpty(),
 ], (req, res) => {
-    var validation_result = validationResult(req);
-    var {user_pass, user_email} = req.body;
+    const validation_result = validationResult(req);
+    const {user_pass, user_email} = req.body;
     if(validation_result.isEmpty()){
-        connection.execute("SELECT * FROM `users` WHERE `email`=?",[user_email])
+        
+        dbConnection.execute("SELECT * FROM `users` WHERE `email`=?",[user_email])
         .then(([rows]) => {
             bcrypt.compare(user_pass, rows[0].password).then(compare_result => {
                 if(compare_result === true){
                     req.session.isLoggedIn = true;
                     req.session.userID = rows[0].id;
 
-                    res.redirect('/admin/posts')
+                    res.redirect('/admin/posts');
                 }
                 else{
-                    res.render('login', {
-                        login_errors: ['Invalid Password!']
-                    })
+                    res.render('login',{
+                        login_errors:['Invalid Password!']
+                    });
                 }
             })
             .catch(err => {
-                if(err) throw err;
-            })
+                if (err) throw err;
+            });
+
+
         }).catch(err => {
-            if(err) throw err;
+            if (err) throw err;
+        });
+    }
+    else{
+        let allErrors = validation_result.errors.map((error) => {
+            return error.msg;
+        });
+        // REDERING login-register PAGE WITH LOGIN VALIDATION ERRORS
+        res.render('login',{
+            login_errors:allErrors
+        });
+    }
+});
+
+// registration
+router.get('/registration', (req,res,next) => {
+    res.render('registration')
+})
+router.post('/register', ifLoggedin, 
+[
+    body('user_email','Invalid email address!').isEmail().custom((value) => {
+        return dbConnection.execute('SELECT `email` FROM `users` WHERE `email`=?', [value])
+        .then(([rows]) => {
+            if(rows.length > 0){
+                return Promise.reject('This E-mail already in use!');
+            }
+            return true;
+        });
+    }),
+    body('user_name','Username is Empty!').trim().not().isEmpty(),
+    body('user_pass','The password must be of minimum length 6 characters').trim().isLength({ min: 6 }),
+],
+(req,res,next) => {
+
+    const validation_result = validationResult(req);
+    const {user_name, user_pass, user_email} = req.body;
+    if(validation_result.isEmpty()){
+        bcrypt.hash(user_pass, 12).then((hash_pass) => {
+            dbConnection.execute("INSERT INTO `users`(`name`,`email`,`password`) VALUES(?,?,?)",[user_name,user_email, hash_pass])
+            .then(result => {
+                res.send(`your account has been created successfully, Now you can <a href="/admin">Login</a>`);
+            }).catch(err => {
+                if (err) throw err;
+            });
+        })
+        .catch(err => {
+            if (err) throw err;
         })
     }
     else{
         let allErrors = validation_result.errors.map((error) => {
             return error.msg;
         });
-        res.render('login',{
-            login_errors:allErrors
-        }); 
+        res.render('registration',{
+            register_error:allErrors,
+            old_data:req.body
+        });
     }
-})
-router.get('/logout',(req,res)=>{
-    req.session = null;
-    res.redirect('/admin');
 });
 
 // categories
@@ -130,7 +199,7 @@ router.get('/categories', ifNotLoggedin, (req, res) => {
     res.render('categories')
 })
 router.get('/create-category', ifNotLoggedin, (req, res) => {
-    connection.execute('SELECT * FROM category ORDER BY Category_ID ASC', (err, result) => {
+    connection.query('SELECT * FROM category ORDER BY Category_ID ASC', (err, result) => {
                 if (!err)
                     res.render('create-category', {category: result});
                 else
@@ -138,7 +207,7 @@ router.get('/create-category', ifNotLoggedin, (req, res) => {
             })
 })
 router.get('/api/categories', (req, res) => {
-    connection.execute('SELECT * FROM category ORDER BY Category_ID ASC', (err, result) => {
+    connection.query('SELECT * FROM category ORDER BY Category_ID ASC', (err, result) => {
         if (!err)
             res.send(result);
         else
@@ -149,9 +218,9 @@ router.post('/create-category', (req, res) => {
     console.log(req.body)
     var sql = "INSERT INTO category VALUES(null, '"+ req.body.Category_Name +"')";
 
-    connection.execute(sql, (err) => {
+    connection.query(sql, (err) => {
         if (!err) {
-            connection.execute('SELECT * FROM category', (err, result) => {
+            connection.query('SELECT * FROM category', (err, result) => {
                 if (!err)
                     res.render('create-category', {category: result});
                 else
@@ -163,7 +232,7 @@ router.post('/create-category', (req, res) => {
 
 // post
 router.get('/posts', ifNotLoggedin, (req, res) => {
-    connection.execute('SELECT * FROM category', (err, result) => {
+    connection.query('SELECT * FROM category', (err, result) => {
         if (!err)
             res.render('post', {category: result});
         else
@@ -171,7 +240,7 @@ router.get('/posts', ifNotLoggedin, (req, res) => {
     })
 })
 router.get('/create-post', ifNotLoggedin, (req, res) => {
-    connection.execute('SELECT * FROM post ORDER BY ID DESC', (err, result) => {
+    connection.query('SELECT * FROM post ORDER BY ID DESC', (err, result) => {
         if (!err)
             res.render('create-post', {posts: result});
         else
@@ -182,9 +251,9 @@ router.post('/create-post', upload.single('uploadImage'), (req, res) => {
 
     var sql = "INSERT INTO post VALUES(null, '"+ req.body.Category_ID +"', '"+ req.body.Category_Name +"', '"+ req.body.Title +"', '"+ req.body.Description +"', '"+ req.file.filename +"', '"+ req.body.Youtube +"')";
 
-    connection.execute(sql, (err) => {
+    connection.query(sql, (err) => {
         if (!err) {
-            connection.execute('SELECT * FROM post', (err, result) => {
+            connection.query('SELECT * FROM post', (err, result) => {
                 if (!err)
                     res.render('create-post', {posts: result});
                 else
@@ -200,10 +269,10 @@ router.get('/delete-post/:id', (req, res) => {
     var sql = "DELETE FROM post WHERE ID = ?";
     var id = req.params.id;
     
-    connection.execute(sql, [id], (err) => {
+    connection.query(sql, [id], (err) => {
         if (!err) {
             // res.send("deleted successfully..")
-            connection.execute('SELECT * FROM post', (err, result) => {
+            connection.query('SELECT * FROM post', (err, result) => {
                 if (!err)
                     res.render('create-post', {posts: result});
                 else
@@ -216,8 +285,8 @@ router.get('/delete-post/:id', (req, res) => {
 })
 
 // home page slider
-router.get('/home-slider', (req, res) => {
-    connection.execute('SELECT * FROM category', (err, result) => {
+router.get('/home-slider', ifNotLoggedin, (req, res) => {
+    connection.query('SELECT * FROM category', (err, result) => {
         if (!err)
             res.render('home-slider', {category: result});
         else
@@ -228,9 +297,9 @@ router.post('/create-banner', upload.single('uploadImage'), (req, res) => {
 
     var sql = "INSERT INTO homeSliders VALUES(null, '"+ req.body.Category_ID +"', '"+ req.body.Category_Name +"', '"+ req.body.Title +"', '"+ req.body.Description +"', '"+ req.file.filename +"', '"+ req.body.Youtube +"')";
 
-    connection.execute(sql, (err) => {
+    connection.query(sql, (err) => {
         if (!err) {
-            connection.execute('SELECT * FROM homeSliders', (err, result) => {
+            connection.query('SELECT * FROM homeSliders', (err, result) => {
                 if (!err)
                     res.render('create-banner', {banner: result});
                 else
@@ -241,8 +310,8 @@ router.post('/create-banner', upload.single('uploadImage'), (req, res) => {
             console.log(err)
     })
 })
-router.get('/create-banner', (req, res) => {
-    connection.execute('SELECT * FROM homeSliders ORDER BY ID DESC', (err, result) => {
+router.get('/create-banner', ifNotLoggedin, (req, res) => {
+    connection.query('SELECT * FROM homeSliders ORDER BY ID DESC', (err, result) => {
         if (!err)
             res.render('create-banner', {banner: result});
         else
@@ -254,9 +323,9 @@ router.get('/delete-banner/:id', (req, res) => {
     var sql = "DELETE FROM homeSliders WHERE ID = ?";
     var id = req.params.id;
     
-    connection.execute(sql, [id], (err) => {
+    connection.query(sql, [id], (err) => {
         if (!err) {
-            connection.execute('SELECT * FROM homeSliders', (err, result) => {
+            connection.query('SELECT * FROM homeSliders', (err, result) => {
                 if (!err)
                     res.render('create-banner', {banner: result});
                 else
@@ -273,9 +342,9 @@ router.post('/create-breaking', upload.single('uploadImage'), (req, res) => {
 
     var sql = "INSERT INTO breaking VALUES(null, '"+ req.body.Category_ID +"', '"+ req.body.Category_Name +"', '"+ req.body.Title +"', '"+ req.body.Description +"', '"+ req.file.filename +"', '"+ req.body.Youtube +"')";
 
-    connection.execute(sql, (err) => {
+    connection.query(sql, (err) => {
         if (!err) {
-            connection.execute('SELECT * FROM breaking', (err, result) => {
+            connection.query('SELECT * FROM breaking', (err, result) => {
                 if (!err)
                     res.render('create-breaking', {breaking: result});
                 else
@@ -286,8 +355,8 @@ router.post('/create-breaking', upload.single('uploadImage'), (req, res) => {
             console.log(err)
     })
 })
-router.get('/breaking', (req, res) => {
-    connection.execute('SELECT * FROM category', (err, result) => {
+router.get('/breaking', ifNotLoggedin, (req, res) => {
+    connection.query('SELECT * FROM category', (err, result) => {
         if (!err)
             res.render('breaking', {category: result});
         else
@@ -295,7 +364,7 @@ router.get('/breaking', (req, res) => {
     })
 })
 router.get('/api/breaking', (req, res) => {
-    connection.execute('SELECT * FROM breaking ORDER BY ID DESC LIMIT 1', (err, result) => {
+    connection.query('SELECT * FROM breaking ORDER BY ID DESC LIMIT 1', (err, result) => {
         if (!err)
             res.send(result);
         else
@@ -305,15 +374,15 @@ router.get('/api/breaking', (req, res) => {
 router.get('/api/breaking/:id', (req, res) => {
     var sql = 'SELECT * FROM breaking WHERE ID = ?'; 
     var id = req.params.id;
-    connection.execute(sql, [id], (err, result) => {
+    connection.query(sql, [id], (err, result) => {
         if (!err)
             res.send(result);
         else
             console.log(err)
     })
 })
-router.get('/create-breaking', (req, res) => {
-    connection.execute('SELECT * FROM breaking ORDER BY ID DESC', (err, result) => {
+router.get('/create-breaking', ifNotLoggedin, (req, res) => {
+    connection.query('SELECT * FROM breaking ORDER BY ID DESC', (err, result) => {
         if (!err)
             res.render('create-breaking', {breaking: result});
         else
@@ -325,9 +394,9 @@ router.get('/delete-breaking/:id', (req, res) => {
     var sql = "DELETE FROM breaking WHERE ID = ?";
     var id = req.params.id;
     
-    connection.execute(sql, [id], (err) => {
+    connection.query(sql, [id], (err) => {
         if (!err) {
-            connection.execute('SELECT * FROM breaking', (err, result) => {
+            connection.query('SELECT * FROM breaking', (err, result) => {
                 if (!err)
                     res.render('create-breaking', {breaking: result});
                 else
@@ -344,9 +413,9 @@ router.post('/create-e-paper', pdf.single('Epaper'), (req, res) => {
 
     var sql = "INSERT INTO epaper VALUES(null, '"+ req.body.selectDate +"', '"+ req.file.filename +"')";
 
-    connection.execute(sql, (err) => {
+    connection.query(sql, (err) => {
         if (!err) {
-            connection.execute('SELECT * FROM epaper', (err, result) => {
+            connection.query('SELECT * FROM epaper', (err, result) => {
                 if (!err)
                     res.render('create-e-paper', {ePaper: result});
                 else
@@ -357,19 +426,19 @@ router.post('/create-e-paper', pdf.single('Epaper'), (req, res) => {
             console.log(err)
     })
 })
-router.get('/e-paper', (req, res) => {
+router.get('/e-paper', ifNotLoggedin, (req, res) => {
     res.render('e-paper')
 })
 router.get('/api/e-paper', (req, res) => {
-    connection.execute('SELECT * FROM epaper ORDER BY ID DESC LIMIT 4', (err, result) => {
+    connection.query('SELECT * FROM epaper ORDER BY ID DESC LIMIT 4', (err, result) => {
         if (!err)
             res.send(result);
         else
             console.log(err)
     })
 })
-router.get('/create-e-paper', (req, res) => {
-    connection.execute('SELECT * FROM epaper ORDER BY ID DESC', (err, result) => {
+router.get('/create-e-paper', ifNotLoggedin, (req, res) => {
+    connection.query('SELECT * FROM epaper ORDER BY ID DESC', (err, result) => {
         if (!err)
             res.render('create-e-paper', {ePaper: result});
         else
@@ -381,9 +450,9 @@ router.get('/delete-e-paper/:id', (req, res) => {
     var sql = "DELETE FROM epaper WHERE ID = ?";
     var id = req.params.id;
     
-    connection.execute(sql, [id], (err) => {
+    connection.query(sql, [id], (err) => {
         if (!err) {
-            connection.execute('SELECT * FROM epaper', (err, result) => {
+            connection.query('SELECT * FROM epaper', (err, result) => {
                 if (!err)
                     res.render('create-e-paper', {ePaper: result});
                 else
@@ -396,19 +465,19 @@ router.get('/delete-e-paper/:id', (req, res) => {
 })
 
 // youtube
-router.get('/youtube', (req, res) => {
+router.get('/youtube', ifNotLoggedin, (req, res) => {
     res.render('youtube')
 })
 router.get('/api/youtube', (req, res) => {
-    connection.execute('SELECT * FROM youtube ORDER BY ID DESC LIMIT 4', (err, result) => {
+    connection.query('SELECT * FROM youtube ORDER BY ID DESC LIMIT 4', (err, result) => {
         if (!err)
             res.send(result);
         else
             console.log(err)
     })
 })
-router.get('/create-youtube', (req, res) => {
-    connection.execute('SELECT * FROM youtube ORDER BY ID DESC', (err, result) => {
+router.get('/create-youtube', ifNotLoggedin, (req, res) => {
+    connection.query('SELECT * FROM youtube ORDER BY ID DESC', (err, result) => {
         if (!err)
             res.render('create-youtube', {youtube: result});
         else
@@ -419,9 +488,9 @@ router.post('/create-youtube', (req, res) => {
 
     var sql = "INSERT INTO youtube VALUES(null, '"+ req.body.Title +"', '"+ req.body.YoutubeLink +"')";
 
-    connection.execute(sql, (err) => {
+    connection.query(sql, (err) => {
         if (!err) {
-            connection.execute('SELECT * FROM youtube', (err, result) => {
+            connection.query('SELECT * FROM youtube', (err, result) => {
                 if (!err)
                     res.render('create-youtube', {youtube: result});
                 else
@@ -437,10 +506,10 @@ router.get('/delete-youtube/:id', (req, res) => {
     var sql = "DELETE FROM youtube WHERE ID = ?";
     var id = req.params.id;
     
-    connection.execute(sql, [id], (err) => {
+    connection.query(sql, [id], (err) => {
         if (!err) {
             // res.send("deleted successfully..")
-            connection.execute('SELECT * FROM youtube', (err, result) => {
+            connection.query('SELECT * FROM youtube', (err, result) => {
                 if (!err)
                     res.render('create-youtube', {youtube: result});
                 else
@@ -453,57 +522,99 @@ router.get('/delete-youtube/:id', (req, res) => {
 })
 
 // gallery
-router.get('/gallery', (req, res) => {
-    connection.execute('SELECT * FROM category', (err, result) => {
+router.get('/gallery', ifNotLoggedin, (req, res) => {
+    connection.query('SELECT * FROM gallery', (err, result) => {
         if (!err)
-            res.render('gallery', {category: result});
+            res.render('gallery', {gallery: result});
         else
             console.log(err)
     })
 })
 router.get('/api/gallery', (req, res) => {
-    connection.execute('SELECT * FROM gallery ORDER BY ID DESC LIMIT 4', (err, result) => {
+    connection.query('SELECT * FROM gallery ORDER BY ID DESC LIMIT 4', (err, result) => {
         if (!err)
             res.send(result);
         else
             console.log(err)
     })
 })
-router.get('/create-gallery', (req, res) => {
-    connection.execute('SELECT * FROM gallery ORDER BY ID DESC', (err, result) => {
+router.get('/create-gallery', ifNotLoggedin, (req, res) => {
+    connection.query('SELECT * FROM galleryUploads ORDER BY ID DESC', (err, result) => {
         if (!err)
-            res.render('create-gallery', {youtube: result});
+            res.render('create-gallery', {gallery: result});
         else
             console.log(err)
     })
 })
-router.post('/create-gallery', upload.array('files', 12), (req, res) => {
-    var values = []
+router.get('/delete-gallery/:id', (req, res) => {
+    
+    var sql = "DELETE FROM galleryUploads WHERE ID = ?";
+    var id = req.params.id;
+    
+    connection.query(sql, [id], (err) => {
+        if (!err) {
+            // res.send("deleted successfully..")
+            connection.query('SELECT * FROM galleryUploads', (err, result) => {
+                if (!err)
+                    res.render('create-gallery', {gallery: result});
+                else
+                    console.log(err)
+            })
+        }
+        else 
+            console.log(err)
+    })
+})
+router.post('/create-gallery-name', (req, res) => {
+    console.log(req.body)
+    var sql = "INSERT INTO gallery VALUES(null, '"+ req.body.Category_Name +"')";
 
+    connection.query(sql, (err) => {
+        if (!err) {
+            connection.query('SELECT * FROM gallery', (err, result) => {
+                if (!err)
+                    res.render('gallery', {gallery: result});
+                else
+                    console.log(err)
+            })
+        }
+    })
+})
+
+router.post('/create-gallery', galleryFolder.array('files', 12), (req, res) => {
+    var values = []
     var images = req.files;
-    //console.log(req.body)
     images.forEach(element => {
         var fileValue = element.filename;
-        var catID = req.body.Category_Name;
+        var catName = req.body.Category_Name;
+        var catID = req.body.Category_ID;
         value = {
-            catID, fileValue
+            catID, catName, fileValue
         }
         var myArr = Object.values(value)
         values.push(myArr)
-        //console.log(value)
-        //values.push(fileValue+','+ '12')
     });
     console.log(values)
-    
-    // values.push('1', '2', '3');
-    
+    var sql = "INSERT INTO galleryUploads (Category_ID, Category_Name, Image) VALUES ?";
+    connection.query(sql, [values], (err) => {
+        if (!err) {
+            connection.query('SELECT * FROM galleryUploads', (err, result) => {
+                if (!err)
+                    res.render('create-gallery', {gallery: result});
+                else
+                    console.log(err)
+            })
+        }
+        else 
+            console.log(err)
+    })
     
     
 })
 
 // api
 router.get('/api/posts', (req, res) => {
-    connection.execute('SELECT * FROM post ORDER BY ID DESC', (err, result) => {
+    connection.query('SELECT * FROM post ORDER BY ID DESC', (err, result) => {
         if (!err)
             res.send(result);
         else
@@ -513,7 +624,7 @@ router.get('/api/posts', (req, res) => {
 router.get('/api/posts/:id', (req, res) => {
     var sql = 'SELECT * FROM post WHERE ID = ?'; 
     var id = req.params.id;
-    connection.execute(sql, [id], (err, result) => {
+    connection.query(sql, [id], (err, result) => {
         if (!err)
             res.send(result);
         else
@@ -523,7 +634,7 @@ router.get('/api/posts/:id', (req, res) => {
 router.get('/api/postsByCatID/:id', (req, res) => {
     var sql = 'SELECT * FROM post WHERE Category_ID = ? ORDER BY ID DESC'; 
     var id = req.params.id;
-    connection.execute(sql, [id], (err, result) => {
+    connection.query(sql, [id], (err, result) => {
         if (!err)
             res.send(result);
         else
@@ -531,7 +642,7 @@ router.get('/api/postsByCatID/:id', (req, res) => {
     })
 })
 router.get('/api/latestLeft', (req, res) => {
-    connection.execute('SELECT * FROM post ORDER BY ID DESC LIMIT 4', (err, result) => {
+    connection.query('SELECT * FROM post ORDER BY ID DESC LIMIT 4', (err, result) => {
         if (!err)
             res.send(result);
         else
@@ -539,7 +650,7 @@ router.get('/api/latestLeft', (req, res) => {
     })
 })
 router.get('/api/latestRight', (req, res) => {
-    connection.execute('SELECT * FROM post ORDER BY ID DESC LIMIT 4, 4', (err, result) => {
+    connection.query('SELECT * FROM post ORDER BY ID DESC LIMIT 4, 4', (err, result) => {
         if (!err)
             res.send(result);
         else
@@ -547,7 +658,7 @@ router.get('/api/latestRight', (req, res) => {
     })
 })
 router.get('/api/ap', (req, res) => {
-    connection.execute('SELECT * FROM post WHERE Category_ID = 31 ORDER BY ID DESC LIMIT 5', (err, result) => {
+    connection.query('SELECT * FROM post WHERE Category_ID = 31 ORDER BY ID DESC LIMIT 5', (err, result) => {
         if (!err)
             res.send(result);
         else
@@ -555,7 +666,7 @@ router.get('/api/ap', (req, res) => {
     })
 })
 router.get('/api/telangana', (req, res) => {
-    connection.execute('SELECT * FROM post WHERE Category_ID = 32 ORDER BY ID DESC LIMIT 5', (err, result) => {
+    connection.query('SELECT * FROM post WHERE Category_ID = 32 ORDER BY ID DESC LIMIT 5', (err, result) => {
         if (!err)
             res.send(result);
         else
@@ -563,7 +674,7 @@ router.get('/api/telangana', (req, res) => {
     })
 })
 router.get('/api/cinema', (req, res) => {
-    connection.execute('SELECT * FROM post WHERE Category_ID = 33 ORDER BY ID DESC LIMIT 5', (err, result) => {
+    connection.query('SELECT * FROM post WHERE Category_ID = 33 ORDER BY ID DESC LIMIT 5', (err, result) => {
         if (!err)
             res.send(result);
         else
@@ -571,7 +682,7 @@ router.get('/api/cinema', (req, res) => {
     })
 })
 router.get('/api/sports', (req, res) => {
-    connection.execute('SELECT * FROM post WHERE Category_ID = 34 ORDER BY ID DESC LIMIT 5', (err, result) => {
+    connection.query('SELECT * FROM post WHERE Category_ID = 34 ORDER BY ID DESC LIMIT 5', (err, result) => {
         if (!err)
             res.send(result);
         else
@@ -579,7 +690,7 @@ router.get('/api/sports', (req, res) => {
     })
 })
 router.get('/api/business', (req, res) => {
-    connection.execute('SELECT * FROM post WHERE Category_ID = 35 ORDER BY ID DESC LIMIT 5', (err, result) => {
+    connection.query('SELECT * FROM post WHERE Category_ID = 35 ORDER BY ID DESC LIMIT 5', (err, result) => {
         if (!err)
             res.send(result);
         else
@@ -587,7 +698,7 @@ router.get('/api/business', (req, res) => {
     })
 })
 router.get('/api/national', (req, res) => {
-    connection.execute('SELECT * FROM post WHERE Category_ID = 36 ORDER BY ID DESC LIMIT 5', (err, result) => {
+    connection.query('SELECT * FROM post WHERE Category_ID = 36 ORDER BY ID DESC LIMIT 5', (err, result) => {
         if (!err)
             res.send(result);
         else
@@ -595,7 +706,7 @@ router.get('/api/national', (req, res) => {
     })
 })
 router.get('/api/world', (req, res) => {
-    connection.execute('SELECT * FROM post WHERE Category_ID = 37 ORDER BY ID DESC LIMIT 5', (err, result) => {
+    connection.query('SELECT * FROM post WHERE Category_ID = 37 ORDER BY ID DESC LIMIT 5', (err, result) => {
         if (!err)
             res.send(result);
         else
@@ -603,7 +714,7 @@ router.get('/api/world', (req, res) => {
     })
 })
 router.get('/api/bannerSlider', (req, res) => {
-    connection.execute('SELECT * FROM homeSliders ORDER BY ID DESC LIMIT 5', (err, result) => {
+    connection.query('SELECT * FROM homeSliders ORDER BY ID DESC LIMIT 5', (err, result) => {
         if (!err)
             res.send(result);
         else
@@ -611,7 +722,7 @@ router.get('/api/bannerSlider', (req, res) => {
     })
 })
 router.get('/api/bannerSlider', (req, res) => {
-    connection.execute('SELECT * FROM homeSliders ORDER BY ID DESC', (err, result) => {
+    connection.query('SELECT * FROM homeSliders ORDER BY ID DESC', (err, result) => {
         if (!err)
             res.send(result);
         else
@@ -621,7 +732,7 @@ router.get('/api/bannerSlider', (req, res) => {
 router.get('/api/bannerSlider/:id', (req, res) => {
     var sql = 'SELECT * FROM homeSliders WHERE ID = ?'; 
     var id = req.params.id;
-    connection.execute(sql, [id], (err, result) => {
+    connection.query(sql, [id], (err, result) => {
         if (!err)
             res.send(result);
         else

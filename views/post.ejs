@@ -68,7 +68,14 @@
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@4.5.3/dist/js/bootstrap.bundle.min.js"
         integrity="sha384-ho+j7jyWK8fNQe+A12Hb8AhRq26LrZ/JpcUGGOn+Y7RsweNrtN/tE3MoK7ZeZDyx"
         crossorigin="anonymous"></script>
-       
+        <script>
+            $("#selectCat").change(function () {
+                console.log($(this).val())
+                var selected = $(this).find(':selected').attr('data-id');
+                console.log(selected)
+                $('#catId').val(selected)
+            });
+    </script>
 </body>
 
 </html>

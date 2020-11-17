@@ -14,7 +14,7 @@
             </div>
             <div class="col">
                 <div class="row no-gutters">
-                    <div class="col-4">
+                    <div class="col-12">
                         <section class="main-body">
                         <h2>View Gallery</h2>
                         <table class="table">
@@ -22,13 +22,17 @@
                                 <tr>
                                     <th>Category Name</th>
                                     <th>Image</th>
+                                    <th>Delete</th>
                                 </tr>
                             </thead>
                             <tbody>
                                 <% gallery.forEach(function(item) { %>
                                 <tr>
-                                    <td><%= item.Category_ID %></td>
-                                    <td><%= item.Image %></td>
+                                    <td><%= item.Category_Name %></td>
+                                    <td>
+                                        <img src="../public/gallery/<%= item.Image %>" alt="" style="max-width: 120px;">
+                                    </td>
+                                    <td><a href="/delete-gallery/<%= item.ID %>">Delete</a></td>
                                 </tr>
                                 <% }) %>
                             </tbody>
